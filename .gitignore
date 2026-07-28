@@ -1,1 +1,6 @@
 py-MCP-STORYSET
+node_modules/
+.wrangler/
+dist/
+worker-configuration.d.ts
+.dev.vars

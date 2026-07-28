@@ -1,0 +1,41 @@
+
+> mcp-storyset@0.1.0 dev C:\Users\LEGION\codebase\MCP-STORYSET
+> wrangler dev
+
+
+ ⛅️ wrangler 4.114.0
+────────────────────
+Your Worker has access to the following bindings:
+Binding                           Resource            Mode
+env.MCP_OBJECT (StorysetMCP)      Durable Object      local
+
+⎔ Starting local server...
+[wrangler:info] Ready on http://127.0.0.1:8791
+[31mX [41;31m[[41;97mERROR[41;31m][0m [1mBuild failed with 1 error:[0m
+
+  [31mX [41;31m[[41;97mERROR[41;31m][0m [1mCould not resolve "C:\\Users\\LEGION\\codebase\\MCP-STORYSET\\worker\\index.ts"[0m
+  
+      .wrangler/tmp/bundle-l3NJhZ/middleware-insertion-facade.js:1:43:
+  [37m      1 │ ...PORTS from [32m"C:\\Users\\LEGION\\codebase\\MCP-STORYSET\\worker\\i[37m...
+          ╵               [32m~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~[0m
+  
+  
+
+
+[31mX [41;31m[[41;97mERROR[41;31m][0m [1mValueExpected[0m
+
+    C:\Users\LEGION\codebase\MCP-STORYSET\wrangler.jsonc:1:0:
+[37m      1 │ [32m[37m
+        ╵ [32m^[0m
+
+
+
+[31mX [41;31m[[41;97mERROR[41;31m][0m [1mThe entry-point file at "worker\index.ts" was not found.[0m
+
+  
+  This might mean that your entry-point file needs to be generated (which is the general case when a framework is being used).
+  If that's the case please run your project's build command and try again.
+
+
+🪵  Logs were written to "C:\Users\LEGION\AppData\Roaming\xdg.config\.wrangler\logs\wrangler-2026-07-28_15-10-24_735.log"
+ ELIFECYCLE  Command failed with exit code 1.
