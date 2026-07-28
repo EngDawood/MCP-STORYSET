@@ -8,17 +8,26 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import {
   ASSET_HOST,
+  MAX_INLINE_BYTES,
+  RECOLOR_PATH,
   downloadAsset,
   extractPalette,
   getIllustration,
   recolorSvg,
+  regenerateRecolored,
   searchAndDownload,
   searchStoryset,
 } from "./lib.js";
 
 export interface Env {
   MCP_OBJECT: DurableObjectNamespace;
+  /** Public origin used to build asset URLs handed back to clients. */
+  PUBLIC_ORIGIN?: string;
 }
+
+const INLINE_DESC =
+  `Return the asset bytes in the result. Off by default: assets can exceed ${MAX_INLINE_BYTES} ` +
+  "bytes and would flood the context. Use the returned `url` instead unless you need to read the markup.";
 
 function json(data: unknown): CallToolResult {
   return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
@@ -69,9 +78,10 @@ export class StorysetMCP extends McpAgent<Env> {
       "download",
       {
         description:
-          "Fetch an asset URL and return its content inline (SVG as utf-8 text, PNG as base64). " +
-          "Optional `recolor` map rewrites hex colors inside an SVG before returning " +
-          "(handy for changing the primary brand color of a Storyset illustration).",
+          "Resolve an asset URL and return its metadata plus a ready-to-use `url` " +
+          "(filename, byte size, content type). Optional `recolor` map rewrites hex colors " +
+          "inside an SVG (handy for changing the primary brand color of a Storyset " +
+          "illustration); the returned `url` then regenerates that recolored SVG on demand.",
         inputSchema: {
           asset_url: z.string().describe(`Direct asset URL from ${ASSET_HOST} (svg/png)`),
           recolor: z
@@ -81,9 +91,11 @@ export class StorysetMCP extends McpAgent<Env> {
               "Optional SVG-only color remap, e.g. {'#BA68C8': '#2196F3'}. " +
                 "Keys = colors currently in SVG, values = target colors. Ignored for PNG.",
             ),
+          inline: z.boolean().default(false).describe(INLINE_DESC),
         },
       },
-      async ({ asset_url, recolor }) => json(await downloadAsset(asset_url, recolor)),
+      async ({ asset_url, recolor, inline }) =>
+        json(await downloadAsset(asset_url, { recolor, inline, origin: this.publicOrigin })),
     );
 
     this.server.registerTool(
@@ -111,8 +123,9 @@ export class StorysetMCP extends McpAgent<Env> {
       "recolor_svg",
       {
         description:
-          "Recolor an SVG and return the modified copy inline. " +
-          "Use `extract_palette` first to see colors.",
+          "Recolor an SVG and return a `url` serving the modified copy, plus per-color " +
+          "replacement counts. Use `extract_palette` first to see colors. Raw inline markup " +
+          "has no source URL to regenerate from, so it is returned inline instead.",
         inputSchema: {
           source: z.string().describe(`SVG asset URL (${ASSET_HOST}) or raw SVG markup`),
           mapping: z
@@ -121,9 +134,11 @@ export class StorysetMCP extends McpAgent<Env> {
               "Color remap, e.g. {'#BA68C8': '#2196F3', '#455a64': '#1a237e'}. " +
                 "Hex 3-digit or 6-digit, case insensitive.",
             ),
+          inline: z.boolean().default(false).describe(INLINE_DESC),
         },
       },
-      async ({ source, mapping }) => json(await recolorSvg(source, mapping)),
+      async ({ source, mapping, inline }) =>
+        json(await recolorSvg(source, mapping, { inline, origin: this.publicOrigin })),
     );
 
     this.server.registerTool(
@@ -147,30 +162,68 @@ export class StorysetMCP extends McpAgent<Env> {
             .record(z.string(), z.string())
             .optional()
             .describe("SVG color remap applied to every downloaded SVG. Ignored for PNG."),
+          inline: z.boolean().default(false).describe(INLINE_DESC),
         },
       },
-      async ({ query, limit, style, format, recolor }) =>
-        json(await searchAndDownload(query, limit, style, format, recolor)),
+      async ({ query, limit, style, format, recolor, inline }) =>
+        json(
+          await searchAndDownload(query, limit, style, format, {
+            recolor,
+            inline,
+            origin: this.publicOrigin,
+          }),
+        ),
     );
+  }
+
+  private get publicOrigin(): string | undefined {
+    return this.env.PUBLIC_ORIGIN;
   }
 }
 
 export default {
-  fetch(request: Request, env: Env, ctx: ExecutionContext): Response | Promise<Response> {
-    const { pathname } = new URL(request.url);
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
+    const url = new URL(request.url);
+    const { pathname } = url;
     if (pathname.startsWith("/sse")) {
       return StorysetMCP.serveSSE("/sse").fetch(request, env, ctx);
     }
     if (pathname.startsWith("/mcp")) {
       return StorysetMCP.serve("/mcp").fetch(request, env, ctx);
     }
-    return new Response(
-      JSON.stringify({
-        name: "mcp-storyset",
-        version: "0.1.0",
-        endpoints: { sse: "/sse", mcp: "/mcp" },
-      }),
-      { headers: { "content-type": "application/json" } },
-    );
+    if (pathname === RECOLOR_PATH) {
+      const result = await regenerateRecolored(
+        url.searchParams.get("src"),
+        url.searchParams.get("map"),
+      );
+      if (!result.ok) {
+        return new Response(JSON.stringify({ error: result.error }), {
+          status: result.status,
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(result.svg, {
+        headers: {
+          "content-type": "image/svg+xml; charset=utf-8",
+          "content-disposition": `inline; filename="${result.filename}"`,
+          // Same inputs always produce the same bytes, so this is safe to cache hard.
+          "cache-control": "public, max-age=86400",
+        },
+      });
+    }
+    if (pathname === "/") {
+      return new Response(
+        JSON.stringify({
+          name: "mcp-storyset",
+          version: "0.1.0",
+          endpoints: { sse: "/sse", mcp: "/mcp" },
+        }),
+        { headers: { "content-type": "application/json" } },
+      );
+    }
+    // This server has no OAuth. A catch-all 200 makes `/.well-known/oauth-*` probes
+    // look like valid discovery documents, so clients start a client-registration
+    // flow that cannot succeed. Unknown paths must 404.
+    return new Response("Not Found", { status: 404 });
   },
 } satisfies ExportedHandler<Env>;

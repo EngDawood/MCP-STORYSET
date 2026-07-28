@@ -7,6 +7,16 @@
 export const BASE = "https://storyset.com";
 export const ASSET_HOST = "stories.freepiklabs.com";
 
+/**
+ * Asset bytes are only ever inlined into a tool result on request, and only
+ * under this cap — a single Storyset SVG runs to ~390 KB, which would swamp an
+ * MCP client's context window. Everything else is handed back as a URL.
+ */
+export const MAX_INLINE_BYTES = 64_000;
+
+/** Route that regenerates a recolored SVG from its source URL + color mapping. */
+export const RECOLOR_PATH = "/f/recolor.svg";
+
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36";
 
@@ -150,6 +160,61 @@ export function applyRecolor(
   return { svg: out, stats };
 }
 
+export function normalizeMapping(mapping: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [src, dst] of Object.entries(mapping)) out[normalizeHex(src)] = normalizeHex(dst);
+  return out;
+}
+
+/**
+ * A recolored SVG exists nowhere on the CDN, so instead of shipping the bytes
+ * we hand back a URL that carries its inputs. Recoloring is a pure function of
+ * (source url, mapping), so the worker can regenerate it on demand — no bucket,
+ * no expiry, no cleanup.
+ */
+export function buildRecolorUrl(
+  origin: string,
+  source: string,
+  mapping: Record<string, string>,
+): string {
+  const u = new URL(RECOLOR_PATH, origin);
+  u.searchParams.set("src", source);
+  u.searchParams.set("map", JSON.stringify(normalizeMapping(mapping)));
+  return u.toString();
+}
+
+export type RegenerateResult =
+  | { ok: true; svg: string; filename: string }
+  | { ok: false; status: number; error: string };
+
+/** Serves {@link RECOLOR_PATH}: refetch the source asset and re-apply the mapping. */
+export async function regenerateRecolored(
+  src: string | null,
+  mapJson: string | null,
+): Promise<RegenerateResult> {
+  if (!src || !isAssetUrl(src) || !isSvgUrl(src)) {
+    return { ok: false, status: 400, error: `src must be an ${ASSET_HOST} .svg URL` };
+  }
+  let mapping: unknown;
+  try {
+    mapping = JSON.parse(mapJson ?? "");
+  } catch {
+    return { ok: false, status: 400, error: "map must be a JSON object of hex color pairs" };
+  }
+  if (typeof mapping !== "object" || mapping === null || Array.isArray(mapping)) {
+    return { ok: false, status: 400, error: "map must be a JSON object of hex color pairs" };
+  }
+  for (const [k, v] of Object.entries(mapping)) {
+    if (typeof v !== "string" || !/^#[0-9a-f]{3}([0-9a-f]{3})?$/i.test(k) || !/^#[0-9a-f]{3}([0-9a-f]{3})?$/i.test(v)) {
+      return { ok: false, status: 400, error: `map entry ${k} is not a hex color pair` };
+    }
+  }
+  const { status, html } = await fetchPage(src);
+  if (status >= 400) return { ok: false, status: 502, error: `asset fetch failed with HTTP ${status}` };
+  const { svg } = applyRecolor(html, mapping as Record<string, string>);
+  return { ok: true, svg, filename: safeFilename(src) };
+}
+
 // ---------------------------------------------------------------------------
 // misc helpers
 // ---------------------------------------------------------------------------
@@ -167,6 +232,18 @@ function toBase64(buf: ArrayBuffer): string {
     binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
   }
   return btoa(binary);
+}
+
+/**
+ * Content is omitted unless the caller asks for it and it fits under
+ * {@link MAX_INLINE_BYTES}; callers always get a `url` they can fetch instead.
+ */
+function inlineContent(inline: boolean, bytes: number, make: () => string) {
+  if (!inline) return {};
+  if (bytes > MAX_INLINE_BYTES) {
+    return { content_omitted: "too_large" as const, max_inline_bytes: MAX_INLINE_BYTES };
+  }
+  return { content: make() };
 }
 
 function isAssetUrl(url: string): boolean {
@@ -244,7 +321,16 @@ export async function getIllustration(slug: string, style: string) {
   return { slug, style, page_url: url, ...assets };
 }
 
-export async function downloadAsset(assetUrl: string, recolor?: Record<string, string>) {
+export interface AssetOptions {
+  recolor?: Record<string, string>;
+  /** Return the bytes in the tool result. Off by default — see {@link MAX_INLINE_BYTES}. */
+  inline?: boolean;
+  /** Public origin of this worker, used to build regeneration URLs. */
+  origin?: string;
+}
+
+export async function downloadAsset(assetUrl: string, opts: AssetOptions = {}) {
+  const { recolor, inline = false, origin } = opts;
   if (!isAssetUrl(assetUrl)) {
     return { error: "invalid_url" as const, detail: `Only ${ASSET_HOST} URLs allowed` };
   }
@@ -272,19 +358,23 @@ export async function downloadAsset(assetUrl: string, recolor?: Record<string, s
       svg = r.svg;
       stats = r.stats;
     }
+    const bytes = new TextEncoder().encode(svg).length;
     return {
       ...base,
-      bytes: new TextEncoder().encode(svg).length,
+      bytes,
       encoding: "utf-8" as const,
-      content: svg,
+      url: recolor && origin ? buildRecolorUrl(origin, assetUrl, recolor) : assetUrl,
       ...(stats ? { recolor_stats: stats } : {}),
+      ...inlineContent(inline, bytes, () => svg),
     };
   }
   return {
     ...base,
     bytes: buf.byteLength,
     encoding: "base64" as const,
-    content: toBase64(buf),
+    url: assetUrl,
+    // base64 inflates by 4/3, so cap against the encoded length, not the raw bytes.
+    ...inlineContent(inline, Math.ceil(buf.byteLength / 3) * 4, () => toBase64(buf)),
   };
 }
 
@@ -299,15 +389,25 @@ export async function extractPalette(source: string, top: number) {
   };
 }
 
-export async function recolorSvg(source: string, mapping: Record<string, string>) {
+export async function recolorSvg(
+  source: string,
+  mapping: Record<string, string>,
+  opts: Pick<AssetOptions, "inline" | "origin"> = {},
+) {
+  const { inline = false, origin } = opts;
   const svg = await loadSvgSource(source);
   if (typeof svg !== "string") return svg;
   const { svg: out, stats } = applyRecolor(svg, mapping);
+  const bytes = new TextEncoder().encode(out).length;
+  // Raw markup has no source URL to regenerate from, so it can only come back inline.
+  const url =
+    /^https?:\/\//i.test(source) && origin ? buildRecolorUrl(origin, source, mapping) : undefined;
   return {
     source: echoSource(source),
-    bytes: new TextEncoder().encode(out).length,
+    bytes,
     recolor_stats: stats,
-    svg: out,
+    ...(url ? { url } : {}),
+    ...inlineContent(inline || !url, bytes, () => out),
   };
 }
 
@@ -316,8 +416,9 @@ export async function searchAndDownload(
   limit: number,
   style: string | undefined,
   format: "svg" | "png",
-  recolor?: Record<string, string>,
+  opts: AssetOptions = {},
 ) {
+  const { recolor, inline = false, origin } = opts;
   const s = await searchStoryset(query, Math.max(limit * 5, limit));
   let results = s.results;
   if (style) results = results.filter((r) => r.style === style);
@@ -332,7 +433,11 @@ export async function searchAndDownload(
       continue;
     }
     try {
-      const d = await downloadAsset(asset, format === "svg" ? recolor : undefined);
+      const d = await downloadAsset(asset, {
+        recolor: format === "svg" ? recolor : undefined,
+        inline,
+        origin,
+      });
       if ("error" in d) {
         errors.push({ slug: r.slug, style: r.style, reason: d.error });
         continue;

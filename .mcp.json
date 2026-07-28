@@ -1,10 +1,12 @@
 {
   "mcpServers": {
     "storyset-local": {
+      "type": "http",
       "url": "http://127.0.0.1:8787/mcp"
     },
         "storyset": {
-      "url": "https://mcp-storyset.engdawood.workers.dev/mcp"
+          "type": "http",
+      "url": "https://storyset-mcp.dawod.workers.dev/mcp"
     }
 
   }

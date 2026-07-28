@@ -69,11 +69,21 @@ const dl = await call("download", {
   asset_url: gi.svg_url,
   recolor: { [primary]: "#2196f3" },
 });
-check("download returns inline svg", dl.encoding === "utf-8" && dl.content.includes("<svg"), `${dl.bytes} bytes`);
+check("download omits bytes by default", dl.content === undefined, `${dl.bytes} bytes, url=${dl.url}`);
+check("download returns a regeneration url", typeof dl.url === "string" && dl.url.includes("/f/recolor.svg"));
 check(
   "download recolor applied",
-  dl.recolor_stats?.[primary] > 0 && dl.content.includes("#2196f3"),
+  dl.recolor_stats?.[primary] > 0,
   `${primary} replaced ${dl.recolor_stats?.[primary]}x`,
+);
+
+// the url must actually serve the recolored svg
+const regen = await fetch(dl.url);
+const regenSvg = await regen.text();
+check(
+  "regeneration url serves recolored svg",
+  regen.ok && regenSvg.includes("<svg") && regenSvg.includes("#2196f3") && !regenSvg.toLowerCase().includes(primary),
+  `HTTP ${regen.status}, ${regenSvg.length} chars, ${regen.headers.get("content-type")}`,
 );
 
 // --- recolor_svg (raw inline svg) -------------------------------------------------
@@ -81,16 +91,36 @@ const rawSvg = `<svg xmlns="http://www.w3.org/2000/svg"><rect style="fill:#BA68C
 const rc = await call("recolor_svg", { source: rawSvg, mapping: { "#ba68c8": "#10b981" } });
 check(
   "recolor_svg rewrites all case variants",
-  rc.recolor_stats?.["#ba68c8"] === 2 && rc.svg.includes("#10b981") && !rc.svg.toLowerCase().includes("#ba68c8"),
+  rc.recolor_stats?.["#ba68c8"] === 2 && rc.content.includes("#10b981") && !rc.content.toLowerCase().includes("#ba68c8"),
   `stats=${JSON.stringify(rc.recolor_stats)}`,
+);
+
+// url-sourced recolor returns a link, not markup
+const rcUrl = await call("recolor_svg", { source: gi.svg_url, mapping: { [primary]: "#10b981" } });
+check(
+  "recolor_svg returns url for url sources",
+  typeof rcUrl.url === "string" && rcUrl.content === undefined,
+  `${rcUrl.bytes} bytes -> ${rcUrl.url?.slice(0, 60)}...`,
+);
+
+// inline is opt-in, and capped
+const big = await call("download", { asset_url: gi.svg_url, inline: true });
+check(
+  "inline honors the size cap",
+  big.bytes > 64_000 ? big.content_omitted === "too_large" : big.content.includes("<svg"),
+  `${big.bytes} bytes, omitted=${big.content_omitted ?? "no"}`,
 );
 
 // --- search_and_download ----------------------------------------------------------
 const sad = await call("search_and_download", { query: "developer", limit: 1, format: "svg" });
 check(
-  "search_and_download saves inline",
-  Array.isArray(sad.saved) && sad.saved.length === 1 && sad.saved[0].encoding === "utf-8" && sad.saved[0].content.includes("<svg"),
-  `errors=${sad.errors?.length ?? 0}`,
+  "search_and_download returns urls, not bytes",
+  Array.isArray(sad.saved) &&
+    sad.saved.length === 1 &&
+    sad.saved[0].encoding === "utf-8" &&
+    sad.saved[0].content === undefined &&
+    typeof sad.saved[0].url === "string",
+  `errors=${sad.errors?.length ?? 0}, url=${sad.saved?.[0]?.url?.slice(0, 60)}`,
 );
 
 await client.close();

@@ -1,9 +1,13 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "mcp-storyset",
+  "name": "storyset-mcp",
+  "account_id": "a89902ed0a23f39985a83e32e1eb5627",
   "main": "worker/index.ts",
   "compatibility_date": "2026-07-26",
   "compatibility_flags": ["nodejs_compat"],
+  "vars": {
+    "PUBLIC_ORIGIN": "https://storyset-mcp.dawod.workers.dev"
+  },
   "durable_objects": {
     "bindings": [
       {
