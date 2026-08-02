@@ -6,7 +6,7 @@
     },
         "storyset": {
           "type": "http",
-      "url": "https://storyset-mcp.dawod.workers.dev/mcp"
+      "url": "https://storyset-mcp.engdawood.com/mcp"
     }
 
   }

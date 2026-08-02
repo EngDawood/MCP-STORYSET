@@ -2,11 +2,9 @@
 
 MCP server for [storyset.com](https://storyset.com) — search, download, and recolor free illustrations from any MCP client.
 
-TypeScript port of [`py-MCP-STORYSET`](py-MCP-STORYSET/), built to run as a **remote MCP server on Cloudflare Workers** (McpAgent + Durable Objects, [`agents`](https://www.npmjs.com/package/agents) SDK). The original Python stdio server still lives in `py-MCP-STORYSET/` and is untouched.
+Built to run as a **remote MCP server on Cloudflare Workers** (McpAgent + Durable Objects, [`agents`](https://www.npmjs.com/package/agents) SDK).
 
 ## Tools
-
-Same 6 tools as the Python version:
 
 | Tool | Purpose |
 |------|---------|
@@ -19,15 +17,12 @@ Same 6 tools as the Python version:
 
 Styles: `amico`, `bro`, `cuate`, `pana`, `rafiki`.
 
-### Differences from the Python version
+### Asset handling
 
-Cloudflare Workers have no filesystem, so save-to-disk semantics were adapted:
+Cloudflare Workers have no filesystem, so assets are returned over the wire:
 
-- `download` / `search_and_download` / `recolor_svg` **return content inline** instead of writing files — SVGs come back as text (`encoding: "utf-8"`), PNGs as base64 (`encoding: "base64"`). Save them client-side if needed.
+- `download` / `search_and_download` / `recolor_svg` **return content inline** — SVGs as text (`encoding: "utf-8"`), PNGs as base64 (`encoding: "base64"`). Save them client-side if needed.
 - `extract_palette` / `recolor_svg` accept an asset URL **or raw SVG markup** as `source` (no local file paths).
-- `output_dir` / `output_path` / `filename` parameters and the `STORYSET_DOWNLOAD_DIR` env var are gone.
-
-Everything else — tool names, scraping logic, recolor behavior — is a faithful port.
 
 ## Requirements
 
@@ -63,7 +58,7 @@ Point any remote-MCP-capable client at the `/mcp` endpoint. For example, with Cl
 claude mcp add --transport http storyset http://127.0.0.1:8787/mcp
 
 # after deploy
-claude mcp add --transport http storyset https://mcp-storyset.<your-subdomain>.workers.dev/mcp
+claude mcp add --transport http storyset https://storyset-mcp.engdawood.com/mcp
 ```
 
 Or test interactively with the MCP inspector:
@@ -81,7 +76,7 @@ pnpm wrangler login
 pnpm deploy
 ```
 
-Wrangler provisions the Durable Objects namespace (`MCP_OBJECT`, class `StorysetMCP`) automatically from `wrangler.jsonc` on first deploy. After deploy, the server is live at `https://mcp-storyset.<your-subdomain>.workers.dev` (`/mcp` and `/sse`).
+Wrangler provisions the Durable Objects namespace (`MCP_OBJECT`, class `StorysetMCP`) automatically from `wrangler.jsonc` on first deploy. The Worker is bound to the custom domain `storyset-mcp.engdawood.com` (Wrangler creates the DNS record and certificate on first deploy), so after deploy the server is live at `https://storyset-mcp.engdawood.com` (`/mcp` and `/sse`).
 
 ## Usage examples
 
