@@ -25,6 +25,20 @@ export interface Env {
   PUBLIC_ORIGIN?: string;
   /** Per-IP rate limiter (see `ratelimits` in wrangler.jsonc). Optional so local dev works without it. */
   RATE_LIMITER?: RateLimit;
+  /** Secret. Requests sending it in `x-bypass-token` skip the rate limiter. */
+  BYPASS_TOKEN?: string;
+}
+
+async function hasBypassToken(request: Request, env: Env): Promise<boolean> {
+  const given = request.headers.get("x-bypass-token");
+  if (!given || !env.BYPASS_TOKEN) return false;
+  // Hash both sides so the comparison is constant-time and length-independent.
+  const enc = new TextEncoder();
+  const [a, b] = await Promise.all([
+    crypto.subtle.digest("SHA-256", enc.encode(given)),
+    crypto.subtle.digest("SHA-256", enc.encode(env.BYPASS_TOKEN)),
+  ]);
+  return crypto.subtle.timingSafeEqual(a, b);
 }
 
 const INLINE_DESC =
@@ -187,7 +201,7 @@ export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     const { pathname } = url;
-    if (pathname !== "/" && env.RATE_LIMITER) {
+    if (pathname !== "/" && env.RATE_LIMITER && !(await hasBypassToken(request, env))) {
       const key = request.headers.get("cf-connecting-ip") ?? "unknown";
       const { success } = await env.RATE_LIMITER.limit({ key });
       if (!success) {
