@@ -205,7 +205,10 @@ export default {
       const key = request.headers.get("cf-connecting-ip") ?? "unknown";
       const { success } = await env.RATE_LIMITER.limit({ key });
       if (!success) {
-        return new Response(JSON.stringify({ error: "Too many requests" }), {
+        return new Response(JSON.stringify({
+          error:
+            "Rate limit exceeded. Retry in 60 seconds. Need higher limits? Contact info@engdawood.com for an access token.",
+        }), {
           status: 429,
           headers: { "content-type": "application/json", "retry-after": "60" },
         });
