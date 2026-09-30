@@ -23,6 +23,8 @@ export interface Env {
   MCP_OBJECT: DurableObjectNamespace;
   /** Public origin used to build asset URLs handed back to clients. */
   PUBLIC_ORIGIN?: string;
+  /** Per-IP rate limiter (see `ratelimits` in wrangler.jsonc). Optional so local dev works without it. */
+  RATE_LIMITER?: RateLimit;
 }
 
 const INLINE_DESC =
@@ -185,6 +187,16 @@ export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     const { pathname } = url;
+    if (pathname !== "/" && env.RATE_LIMITER) {
+      const key = request.headers.get("cf-connecting-ip") ?? "unknown";
+      const { success } = await env.RATE_LIMITER.limit({ key });
+      if (!success) {
+        return new Response(JSON.stringify({ error: "Too many requests" }), {
+          status: 429,
+          headers: { "content-type": "application/json", "retry-after": "60" },
+        });
+      }
+    }
     if (pathname.startsWith("/sse")) {
       return StorysetMCP.serveSSE("/sse").fetch(request, env, ctx);
     }
