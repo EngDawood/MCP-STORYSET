@@ -11,9 +11,6 @@
       "custom_domain": true
     }
   ],
-  "vars": {
-    "PUBLIC_ORIGIN": "https://storyset-mcp.engdawood.com"
-  },
   "durable_objects": {
     "bindings": [
       {

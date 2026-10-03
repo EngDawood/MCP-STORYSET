@@ -129,7 +129,7 @@ pnpm smoke      # MCP client smoke test against a running `pnpm dev`
 
 ## Deploy your own instance
 
-The public instance is already live, so this is only for self-hosting. Set your own hostname in `wrangler.jsonc` (the `routes` pattern and `PUBLIC_ORIGIN`) first — `PUBLIC_ORIGIN` is what recolor URLs are built from, so a stale value yields URLs pointing at someone else's Worker.
+The public instance is already live, so this is only for self-hosting. Point the `routes` pattern in `wrangler.jsonc` at your own hostname first (or drop `routes` entirely to deploy on `workers.dev`). Recolor URLs are built from each request's own origin, so a cloned deployment automatically links to itself — no origin variable to configure.
 
 ```bash
 pnpm wrangler login

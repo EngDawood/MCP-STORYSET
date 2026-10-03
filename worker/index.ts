@@ -21,12 +21,20 @@ import {
 
 export interface Env {
   MCP_OBJECT: DurableObjectNamespace;
-  /** Public origin used to build asset URLs handed back to clients. */
-  PUBLIC_ORIGIN?: string;
   /** Per-IP rate limiter (see `ratelimits` in wrangler.jsonc). Optional so local dev works without it. */
   RATE_LIMITER?: RateLimit;
   /** Secret. Requests sending it in `x-bypass-token` skip the rate limiter. */
   BYPASS_TOKEN?: string;
+}
+
+/**
+ * Per-request props: the worker's own public origin, derived from the
+ * incoming request URL in `fetch` below. This is how recolor URLs always
+ * point at the deployment serving the request — no env var to configure,
+ * so a cloned repo links to its own worker automatically.
+ */
+interface McpProps {
+  origin: string;
 }
 
 async function hasBypassToken(request: Request, env: Env): Promise<boolean> {
@@ -51,7 +59,7 @@ function json(data: unknown): CallToolResult {
 
 const STYLE = z.enum(["amico", "bro", "cuate", "pana", "rafiki"]);
 
-export class StorysetMCP extends McpAgent<Env> {
+export class StorysetMCP extends McpAgent<Env, unknown, McpProps> {
   server = new McpServer({
     name: "mcp-storyset",
     version: "0.1.0",
@@ -193,7 +201,7 @@ export class StorysetMCP extends McpAgent<Env> {
   }
 
   private get publicOrigin(): string | undefined {
-    return this.env.PUBLIC_ORIGIN;
+    return this.props?.origin;
   }
 }
 
@@ -215,9 +223,13 @@ export default {
       }
     }
     if (pathname.startsWith("/sse")) {
+      // Hand the agent the request's own origin so asset URLs always point
+      // at this deployment, whoever deployed it.
+      ctx.props = { origin: url.origin };
       return StorysetMCP.serveSSE("/sse").fetch(request, env, ctx);
     }
     if (pathname.startsWith("/mcp")) {
+      ctx.props = { origin: url.origin };
       return StorysetMCP.serve("/mcp").fetch(request, env, ctx);
     }
     if (pathname === RECOLOR_PATH) {
